@@ -1,0 +1,972 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>CuteCute Duo Cat Adventure</title>
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #f7eefe; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+(() => {
+  "use strict";
+  const cv = document.getElementById("game");
+  const ctx = cv.getContext("2d");
+  const WW = 1600, WH = 900, GRAV = 2200;
+  let vw = 1600, vh = 900, shake = 0;
+  const K = { down: new Set(), hit: new Set() };
+
+  addEventListener("keydown", e => {
+    if (!K.down.has(e.code)) K.hit.add(e.code);
+    K.down.add(e.code);
+    if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Slash","KeyW","KeyA","KeyS","KeyD","KeyF","Escape"].includes(e.code)) e.preventDefault();
+  });
+  addEventListener("keyup", e => K.down.delete(e.code));
+
+  function fit() {
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    vw = innerWidth; vh = innerHeight;
+    cv.width = vw * dpr; cv.height = vh * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  addEventListener("resize", fit);
+  fit();
+
+  const wx = v => v * vw / WW;
+  const wy = v => v * vh / WH;
+  const fx = [];
+
+  function burst(x, y, n, c, sp = 220, life = 0.6) {
+    for (let i = 0; i < n; i++) {
+      fx.push({
+        x, y, vx: (Math.random() * 2 - 1) * sp, vy: -Math.random() * sp,
+        g: 560, s: 2 + Math.random() * 4, t: life, m: life, c
+      });
+    }
+  }
+
+  function rr(x, y, w, h, r, a, b) {
+    const g = ctx.createLinearGradient(x, y, x, y + h);
+    g.addColorStop(0, a); g.addColorStop(1, b);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function star(x, y, r, c = "#ffe68e") {
+    ctx.fillStyle = c;
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const a = -Math.PI / 2 + i * Math.PI / 5;
+      const rr0 = i % 2 ? r * 0.42 : r;
+      const sx = x + Math.cos(a) * rr0;
+      const sy = y + Math.sin(a) * rr0;
+      if (!i) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function heart(x, y, s, c1 = "#ff8eb7", c2 = "#ffd4e7") {
+    ctx.save();
+    ctx.translate(x, y);
+    const g = ctx.createLinearGradient(0, -s, 0, s);
+    g.addColorStop(0, c2); g.addColorStop(1, c1);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(0, s * 0.9);
+    ctx.bezierCurveTo(-s * 1.1, s * 0.1, -s, -s * 0.65, 0, -s * 0.2);
+    ctx.bezierCurveTo(s, -s * 0.65, s * 1.1, s * 0.1, 0, s * 0.9);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function fish(x, y, s, col = "#7ad7ff") {
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.ellipse(x, y, s * 0.9, s * 0.54, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(x + s * 0.72, y);
+    ctx.lineTo(x + s * 1.2, y - s * 0.36);
+    ctx.lineTo(x + s * 1.2, y + s * 0.36);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.arc(x - s * 0.3, y - s * 0.08, 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function cloud(x, y, s, a) {
+    ctx.globalAlpha = a;
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.arc(x, y, s * 0.34, 0, Math.PI * 2);
+    ctx.arc(x + s * 0.28, y - s * 0.16, s * 0.27, 0, Math.PI * 2);
+    ctx.arc(x + s * 0.58, y, s * 0.31, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  function candySwirl(x, y, r, c1, c2) {
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = c1;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0.2, Math.PI * 1.8);
+    ctx.stroke();
+    ctx.strokeStyle = c2;
+    ctx.beginPath();
+    ctx.arc(x, y, r * 0.66, 0.2, Math.PI * 1.8);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(x, y, r * 0.33, 0.2, Math.PI * 1.8);
+    ctx.stroke();
+  }
+
+  function drawCandySky(t, sparkle) {
+    const g = ctx.createLinearGradient(0, 0, 0, vh);
+    g.addColorStop(0, "#bde8ff");
+    g.addColorStop(0.58, "#f2d8ff");
+    g.addColorStop(1, "#ffd8f0");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, vw, vh);
+
+    for (let i = 0; i < 10; i++) {
+      cloud(((i * 220 + t * 9) % (vw + 260)) - 140, 58 + (i % 4) * 62, 96, 0.42);
+      ctx.globalAlpha = 0.25;
+      candySwirl(((i * 220 + t * 9) % (vw + 260)) - 120, 64 + (i % 4) * 62, 14, "#ffb5d8", "#ffe1f2");
+      ctx.globalAlpha = 1;
+    }
+
+    for (let i = 0; i < 6; i++) {
+      const x = ((i * 290 + t * 13) % (vw + 380)) - 140;
+      const y = 170 + (i % 3) * 110;
+      rr(x, y, 140, 46, 20, "rgba(255,190,220,0.18)", "rgba(255,130,180,0.14)");
+    }
+
+    for (let i = 0; i < 7; i++) {
+      const x = ((i * 250 + t * 20) % (vw + 220)) - 80;
+      const y = vh - 250 + (i % 2) * 50;
+      rr(x, y, 90, 60, 12, "rgba(170,245,180,0.14)", "rgba(110,200,130,0.14)");
+    }
+
+    if (sparkle) {
+      for (let i = 0; i < 12; i++) {
+        star((i * 170 + t * 54) % (vw + 40), 62 + (i * 43) % 220, 7, "#fff4a5");
+      }
+    }
+  }
+
+  function hit(a, b) {
+    return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  }
+
+  class Cat {
+    constructor(id, kind, key, sx, sy) {
+      this.id = id; this.kind = kind; this.key = key; this.sx = sx; this.sy = sy;
+      this.reset();
+    }
+    reset() {
+      this.x = this.sx; this.y = this.sy;
+      this.w = this.kind === "blue" ? 68 : 64;
+      this.h = this.kind === "blue" ? 74 : 70;
+      this.vx = 0; this.vy = 0;
+      this.face = 1; this.ground = false; this.dead = false;
+      this.carry = null; this.inBy = null;
+      this.cd = 0; this.fly = 0;
+      this.t = 0; this.blink = 0; this.bt = 2 + Math.random() * 2;
+      this.land = 0; this.mood = "normal";
+      this.jumpsLeft = 2;
+    }
+    box() { return { x: this.x - this.w / 2, y: this.y - this.h, w: this.w, h: this.h }; }
+    mass() { return this.carry ? 2 : 1; }
+    upd(dt, solids) {
+      this.t += dt;
+      this.cd = Math.max(0, this.cd - dt);
+      this.fly = Math.max(0, this.fly - dt);
+      this.land = Math.max(0, this.land - dt * 4);
+      this.bt -= dt;
+      if (this.bt <= 0) { this.blink = 0.12; this.bt = 2 + Math.random() * 3; }
+      this.blink = Math.max(0, this.blink - dt);
+      if (this.inBy) return;
+
+      let ax = 0;
+      if (K.down.has(this.key.l)) ax -= 1;
+      if (K.down.has(this.key.r)) ax += 1;
+      if (ax) this.face = ax > 0 ? 1 : -1;
+
+      const spd = (this.kind === "white" ? 368 : 338) * (this.carry ? 0.86 : 1);
+      const acc = 2600;
+      if (ax) this.vx += ax * acc * dt;
+      else this.vx *= this.ground ? 0.8 : 0.92;
+      this.vx = Math.max(-spd, Math.min(spd, this.vx));
+
+      if (K.hit.has(this.key.j) && this.jumpsLeft > 0) {
+        const jp = (this.kind === "white" ? 840 : 812) * (this.carry ? 0.92 : 1) * (this.jumpsLeft === 1 ? 0.9 : 1);
+        this.vy = -jp;
+        this.ground = false;
+        this.jumpsLeft--;
+        burst(this.x, this.y, 6, "#ffffff", 130, 0.35);
+      }
+
+      this.vy += GRAV * dt;
+      if (this.vy > 1600) this.vy = 1600;
+
+      this.x += this.vx * dt;
+      let b = this.box();
+      for (const s of solids) {
+        if (hit(b, s)) {
+          if (this.vx > 0) this.x = s.x - this.w / 2;
+          if (this.vx < 0) this.x = s.x + s.w + this.w / 2;
+          this.vx = 0;
+          b = this.box();
+        }
+      }
+
+      this.y += this.vy * dt;
+      this.ground = false;
+      b = this.box();
+      for (const s of solids) {
+        if (hit(b, s)) {
+          if (this.vy > 0) {
+            if (Math.abs(this.vy) > 280) {
+              this.land = 0.7;
+              burst(this.x, this.y, 6, "#ffeaf4", 160, 0.42);
+            }
+            this.y = s.y;
+            this.vy = 0;
+            this.ground = true;
+            this.jumpsLeft = 2;
+          } else if (this.vy < 0) {
+            this.y = s.y + s.h + this.h;
+            this.vy = 0;
+          }
+          b = this.box();
+        }
+      }
+
+      if (this.x < this.w / 2) this.x = this.w / 2;
+      if (this.x > WW - this.w / 2) this.x = WW - this.w / 2;
+      if (this.y > WH + 260) die(this);
+    }
+    draw(cos) {
+      if (this.dead || this.inBy) return;
+      const bob = Math.sin(this.t * 3.1) * 2 + Math.sin(this.t * (4 + Math.abs(this.vx) * 0.014)) * Math.min(1, Math.abs(this.vx) / 260) * 2.5;
+      const sx0 = 1 - this.land * 0.08;
+      const sy0 = 1 + this.land * 0.07;
+      const yy = this.y + bob;
+      ctx.save();
+      ctx.globalAlpha = 0.16;
+      ctx.fillStyle = "#513f58";
+      ctx.beginPath();
+      ctx.ellipse(wx(this.x), wy(this.y + 4), wx(this.w * 0.42), wy(14), 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      if (cos.trail && Math.abs(this.vx) > 240) burst(this.x - this.face * 12, this.y - 28, 1, this.kind === "blue" ? "#b3deff" : "#ffd8ee", 35, 0.25);
+      if (this.kind === "blue") drawBlueCat(this, yy, sx0, sy0, cos.blush);
+      else drawWhiteCat(this, yy, sx0, sy0, cos.bow);
+    }
+  }
+
+  function eye(ex, ey, blink, bean = false, d = "#2d2232") {
+    ctx.fillStyle = d;
+    if (blink) { ctx.fillRect(ex - 4, ey, 8, 2); return; }
+    if (bean) { ctx.beginPath(); ctx.ellipse(ex, ey, 3.4, 4.2, 0, 0, Math.PI * 2); ctx.fill(); return; }
+    ctx.beginPath();
+    ctx.arc(ex, ey, 5.8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    ctx.beginPath();
+    ctx.arc(ex - 1.5, ey - 1.5, 1.7, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function ear(x, y, s, o, i) {
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x - s * 0.45, y + s);
+    ctx.lineTo(x + s * 0.45, y + s);
+    ctx.closePath();
+    ctx.fillStyle = o;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(x, y + s * 0.34);
+    ctx.lineTo(x - s * 0.2, y + s * 0.84);
+    ctx.lineTo(x + s * 0.2, y + s * 0.84);
+    ctx.closePath();
+    ctx.fillStyle = i;
+    ctx.fill();
+  }
+
+  function mood(m, x, y, c = "#53445f") {
+    ctx.strokeStyle = c;
+    ctx.fillStyle = c;
+    ctx.lineWidth = 2;
+    if (m === "happy") {
+      ctx.beginPath();
+      ctx.arc(x, y, 7, 0.1, Math.PI - 0.1);
+      ctx.stroke();
+    } else if (m === "wow") {
+      ctx.beginPath();
+      ctx.arc(x, y, 3.2, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (m === "dizzy") {
+      ctx.beginPath();
+      ctx.moveTo(x - 6, y);
+      ctx.lineTo(x + 6, y);
+      ctx.stroke();
+    }
+  }
+
+  function drawBlueCat(p, yy, sx0, sy0, blush) {
+    ctx.save();
+    ctx.translate(wx(p.x), wy(yy));
+    ctx.scale((vw / WW) * sx0, (vh / WH) * sy0);
+    const load = !!p.carry;
+    const blink = p.blink > 0;
+    const bw = p.w * 0.66, bh = p.h * 0.4, hr = p.w * 0.37;
+
+    rr(-bw / 2, -bh, bw, bh * (load ? 1.2 : 1), 18, "#bae0ff", "#87c3ff");
+    rr(-bw * 0.18, -bh * 0.7, bw * 0.36, bh * (load ? 0.7 : 0.55), 12, "#fff6fb", "#ffe7f0");
+    ctx.beginPath();
+    ctx.arc(0, -p.h * 0.73, hr, 0, Math.PI * 2);
+    ctx.fillStyle = "#9ccfff";
+    ctx.fill();
+    ear(-hr * 0.75, -p.h * 1.05 + Math.sin(p.t * 8) * 0.8, 19, "#94c8fb", "#ffd2e8");
+    ear(hr * 0.75, -p.h * 1.05 - Math.sin(p.t * 8) * 0.8, 19, "#94c8fb", "#ffd2e8");
+    eye(-12, -p.h * 0.75, blink);
+    eye(12, -p.h * 0.75, blink);
+    const b = blush ? 1.35 : 1;
+    ctx.fillStyle = "#ffb7ce";
+    ctx.beginPath(); ctx.ellipse(-19, -p.h * 0.67, 8 * b, 5 * b, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(19, -p.h * 0.67, 8 * b, 5 * b, 0, 0, Math.PI * 2); ctx.fill();
+    mood(p.mood, 0, -p.h * 0.64);
+    ctx.fillStyle = "#8fc5ff";
+    ctx.beginPath();
+    ctx.moveTo(bw * 0.33 * p.face, -bh * 0.35);
+    ctx.quadraticCurveTo(bw * 0.58 * p.face, -bh * 0.46, bw * 0.62 * p.face, -bh * 0.14);
+    ctx.quadraticCurveTo(bw * 0.49 * p.face, -bh * 0.06, bw * 0.32 * p.face, -bh * 0.18);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawWhiteCat(p, yy, sx0, sy0, shiny) {
+    ctx.save();
+    ctx.translate(wx(p.x), wy(yy));
+    ctx.scale((vw / WW) * sx0, (vh / WH) * sy0);
+    const load = !!p.carry;
+    const blink = p.blink > 0;
+    const bw = p.w * 0.56, bh = p.h * 0.34, fw = p.w * 0.98, fh = p.h * 0.76;
+
+    rr(-bw / 2, -bh, bw, bh * (load ? 1.2 : 1), 14, "#fff8fc", "#ffe8f3");
+    ctx.beginPath();
+    ctx.ellipse(0, -p.h * 0.74, fw * 0.5, fh * 0.5, 0, 0, Math.PI * 2);
+    ctx.fillStyle = "#fff";
+    ctx.fill();
+    const sh = ctx.createRadialGradient(-12, -p.h * 0.86, 8, 0, -p.h * 0.65, 46);
+    sh.addColorStop(0, "rgba(255,255,255,0)");
+    sh.addColorStop(1, "rgba(255,187,215,0.26)");
+    ctx.fillStyle = sh;
+    ctx.beginPath();
+    ctx.ellipse(0, -p.h * 0.72, fw * 0.46, fh * 0.47, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ear(-fw * 0.33, -p.h * 1.07 + Math.sin(p.t * 8) * 0.7, 20, "#fff", "#ffd9ea");
+    ear(fw * 0.33, -p.h * 1.07 - Math.sin(p.t * 8) * 0.7, 20, "#fff", "#ffd9ea");
+    const bx = -fw * 0.42, by = -p.h * 1.02;
+    rr(bx - 16, by - 8, 14, 12, 5.5, shiny ? "#ff5da8" : "#ff76b6", shiny ? "#ff8bc3" : "#ff9fca");
+    rr(bx + 2, by - 8, 14, 12, 5.5, shiny ? "#ff5da8" : "#ff76b6", shiny ? "#ff8bc3" : "#ff9fca");
+    rr(bx - 3, by - 6, 6, 10, 4, "#ffd7ec", "#ffbfe0");
+    if (shiny) {
+      ctx.fillStyle = "rgba(255,255,255,0.62)";
+      ctx.fillRect(bx - 11, by - 6, 4, 2);
+      ctx.fillRect(bx + 7, by - 6, 4, 2);
+    }
+    eye(-13, -p.h * 0.76, blink, true);
+    eye(13, -p.h * 0.76, blink, true);
+    ctx.fillStyle = "#ffd769";
+    ctx.beginPath();
+    ctx.ellipse(0, -p.h * 0.69, 6.8, 5.3, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,188,206,0.35)";
+    ctx.beginPath(); ctx.ellipse(-22, -p.h * 0.68, 7.2, 4.2, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(22, -p.h * 0.68, 7.2, 4.2, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#ffeef7";
+    ctx.beginPath();
+    ctx.moveTo(bw * 0.32 * p.face, -bh * 0.25);
+    ctx.quadraticCurveTo(bw * 0.5 * p.face, -bh * 0.35, bw * 0.6 * p.face, -bh * 0.12);
+    ctx.quadraticCurveTo(bw * 0.52 * p.face, -bh * 0.02, bw * 0.34 * p.face, -bh * 0.08);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawSweetPlatform(p, idx) {
+    const x = wx(p.x), y = wy(p.y), w = wx(p.w), h = wy(p.h);
+    const thick = Math.max(h * 1.95, 26);
+    const r = 14;
+    const topA = p.s === "mint" ? "#ffe2f1" : p.s === "pink" ? "#ffd2e7" : "#ffe8f7";
+    const topB = p.s === "mint" ? "#ffcde5" : p.s === "pink" ? "#ffbfdc" : "#ffd8ef";
+    const midA = p.s === "mint" ? "#7a4b3f" : p.s === "pink" ? "#6f4238" : "#815247";
+    const midB = p.s === "mint" ? "#5f362d" : p.s === "pink" ? "#573028" : "#694237";
+    const botA = p.s === "mint" ? "#ffd8a9" : p.s === "pink" ? "#f8c995" : "#f5d2a5";
+    const botB = p.s === "mint" ? "#f1be83" : p.s === "pink" ? "#ebb070" : "#efbf86";
+
+    ctx.save();
+    ctx.globalAlpha = 0.2;
+    rr(x + 3, y + thick - 2, w, 8, 6, "#6b4152", "#5a3446");
+    ctx.restore();
+
+    rr(x, y, w, thick * 0.32, r, topA, topB);
+    rr(x, y + thick * 0.29, w, thick * 0.35, r * 0.7, midA, midB);
+    rr(x, y + thick * 0.6, w, thick * 0.4, r * 0.7, botA, botB);
+
+    ctx.fillStyle = "rgba(255,255,255,0.55)";
+    ctx.fillRect(x + 9, y + 6, Math.max(8, w - 18), Math.max(4, thick * 0.07));
+    ctx.fillStyle = "rgba(90,40,40,0.18)";
+    for (let i = 0; i < Math.floor(w / 28); i++) {
+      const cx = x + 12 + i * 28 + (idx % 2 ? 3 : 0);
+      ctx.fillRect(cx, y + thick * 0.72, 10, 4);
+    }
+
+    if (idx % 5 === 0) {
+      const dx = x + w * 0.22;
+      const dy = y - 8;
+      rr(dx - 12, dy - 2, 24, 10, 5, "#ff95c9", "#ff79b8");
+      ctx.fillStyle = "#fff4a8";
+      star(dx, dy - 1, 5);
+    }
+    if (idx % 7 === 0) {
+      const cx = x + w * 0.72;
+      const cy = y + 2;
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = "#ff9ecf";
+      ctx.beginPath();
+      ctx.arc(cx, cy + 4, 8, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  function levels() {
+    const g = { x: 0, y: 830, w: 1600, h: 70, s: "mint" };
+    return [
+      { name: "奶油草地起步", theme: "基础手感", hint: "掌握双猫移动与跳跃", sp: { b: [120, 810], w: [190, 810] }, p: [g, { x: 250, y: 740, w: 210, h: 24, s: "blue" }, { x: 520, y: 690, w: 190, h: 24, s: "pink" }, { x: 770, y: 640, w: 210, h: 24, s: "mint" }, { x: 1060, y: 700, w: 220, h: 24, s: "blue" }, { x: 1340, y: 760, w: 220, h: 24, s: "pink" }], h: [{ x: 670, y: 812, w: 80, h: 18, k: "sp" }], b: [], gate: [], c: [{ x: 350, y: 700, t: "heart" }, { x: 620, y: 650, t: "heart" }, { x: 890, y: 600, t: "heart" }, { x: 1160, y: 650, t: "fish" }], goal: { x: 1450, y: 700, w: 120, h: 130 }, ch: s => s.death === 0 },
+      { name: "双铃庭院", theme: "双人机关", hint: "A/B 按钮同时踩住才开门", sp: { b: [80, 810], w: [145, 810] }, p: [g, { x: 260, y: 730, w: 160, h: 24, s: "pink" }, { x: 470, y: 670, w: 140, h: 24, s: "blue" }, { x: 680, y: 620, w: 140, h: 24, s: "mint" }, { x: 980, y: 640, w: 170, h: 24, s: "pink" }, { x: 1210, y: 590, w: 180, h: 24, s: "blue" }, { x: 1390, y: 730, w: 180, h: 24, s: "mint" }], h: [{ x: 860, y: 812, w: 100, h: 18, k: "sp" }], b: [{ x: 530, y: 806, w: 66, h: 24, id: "A", hv: false }, { x: 670, y: 806, w: 66, h: 24, id: "B", hv: false }], gate: [{ x: 855, y: 720, w: 52, h: 110, need: ["A", "B"] }], c: [{ x: 300, y: 690, t: "heart" }, { x: 740, y: 580, t: "heart" }, { x: 1240, y: 550, t: "heart" }, { x: 920, y: 680, t: "fish" }], goal: { x: 1460, y: 600, w: 120, h: 130 }, ch: s => s.death <= 1 },
+      { name: "泡泡实验室", theme: "吞吐入门", hint: "靠近吞入，再次按键吐出飞行", sp: { b: [90, 810], w: [160, 810] }, p: [g, { x: 260, y: 760, w: 180, h: 24, s: "blue" }, { x: 520, y: 720, w: 170, h: 24, s: "pink" }, { x: 860, y: 620, w: 200, h: 24, s: "mint" }, { x: 1160, y: 660, w: 210, h: 24, s: "blue" }, { x: 1410, y: 580, w: 160, h: 24, s: "pink" }], h: [{ x: 700, y: 808, w: 130, h: 22, k: "co" }], b: [], gate: [], c: [{ x: 330, y: 720, t: "heart" }, { x: 600, y: 680, t: "heart" }, { x: 770, y: 560, t: "star" }, { x: 1270, y: 620, t: "fish" }], goal: { x: 1460, y: 450, w: 110, h: 130 }, ch: s => s.star >= 1 },
+      { name: "彩虹断桥+", theme: "吞吐强依赖", hint: "普通跳不过，必须吐出跨沟", sp: { b: [80, 810], w: [150, 810] }, p: [{ x: 0, y: 830, w: 300, h: 70, s: "mint" }, { x: 470, y: 760, w: 180, h: 26, s: "blue" }, { x: 860, y: 680, w: 180, h: 26, s: "pink" }, { x: 1220, y: 610, w: 210, h: 26, s: "mint" }, { x: 1490, y: 540, w: 110, h: 26, s: "blue" }], h: [{ x: 300, y: 830, w: 170, h: 70, k: "co" }, { x: 650, y: 830, w: 210, h: 70, k: "co" }, { x: 1040, y: 830, w: 180, h: 70, k: "co" }], b: [], gate: [], c: [{ x: 520, y: 720, t: "heart" }, { x: 920, y: 640, t: "heart" }, { x: 1300, y: 570, t: "heart" }, { x: 1140, y: 530, t: "fish" }], goal: { x: 1490, y: 410, w: 110, h: 130 }, ch: s => s.death === 0 },
+      { name: "果冻门禁厂", theme: "时序配合", hint: "先过门再回接队友", sp: { b: [80, 810], w: [150, 810] }, p: [g, { x: 300, y: 760, w: 180, h: 24, s: "pink" }, { x: 560, y: 720, w: 160, h: 24, s: "mint" }, { x: 860, y: 730, w: 150, h: 24, s: "blue" }, { x: 1060, y: 650, w: 170, h: 24, s: "pink" }, { x: 1280, y: 570, w: 170, h: 24, s: "mint" }, { x: 1470, y: 510, w: 120, h: 24, s: "blue" }], h: [{ x: 740, y: 812, w: 90, h: 18, k: "sp" }, { x: 1190, y: 812, w: 70, h: 18, k: "sp" }], b: [{ x: 600, y: 806, w: 72, h: 24, id: "A", hv: false }], gate: [{ x: 760, y: 660, w: 54, h: 170, need: ["A"] }], c: [{ x: 360, y: 720, t: "heart" }, { x: 610, y: 680, t: "heart" }, { x: 930, y: 690, t: "star" }, { x: 1320, y: 530, t: "fish" }], goal: { x: 1490, y: 390, w: 110, h: 130 }, ch: s => s.star >= 1 && s.death <= 1 },
+      { name: "浮空搬运线2.0", theme: "动态吐出精准", hint: "节奏+二段跳+吐出，关键落点已放宽", sp: { b: [90, 810], w: [160, 810] }, p: [{ x: 0, y: 830, w: 220, h: 70, s: "mint" }, { x: 300, y: 760, w: 190, h: 26, s: "blue", m: { t: "sy", r: 52, v: 1.0 } }, { x: 560, y: 710, w: 170, h: 24, s: "pink", m: { t: "sx", r: 66, v: 1.0 } }, { x: 820, y: 655, w: 170, h: 24, s: "mint", m: { t: "sy", r: 60, v: 1.0 } }, { x: 1080, y: 600, w: 170, h: 24, s: "blue", m: { t: "sx", r: 70, v: 1.0 } }, { x: 1340, y: 545, w: 180, h: 24, s: "pink" }, { x: 1510, y: 490, w: 110, h: 24, s: "mint" }], h: [{ x: 220, y: 830, w: 140, h: 70, k: "co" }, { x: 710, y: 830, w: 120, h: 70, k: "co" }, { x: 1230, y: 830, w: 120, h: 70, k: "co" }], b: [], gate: [], c: [{ x: 350, y: 650, t: "heart" }, { x: 630, y: 620, t: "star" }, { x: 950, y: 560, t: "heart" }, { x: 1410, y: 510, t: "fish" }], goal: { x: 1500, y: 360, w: 100, h: 130 }, ch: s => s.death <= 2 },
+      { name: "压重神殿+", theme: "吞入增重", hint: "重压按钮容错已修正", sp: { b: [90, 810], w: [150, 810] }, p: [g, { x: 280, y: 740, w: 200, h: 28, s: "blue" }, { x: 540, y: 700, w: 200, h: 28, s: "mint" }, { x: 810, y: 670, w: 180, h: 28, s: "pink" }, { x: 1090, y: 620, w: 200, h: 28, s: "blue" }, { x: 1360, y: 560, w: 180, h: 28, s: "mint" }], h: [{ x: 980, y: 812, w: 90, h: 18, k: "sp" }, { x: 1220, y: 812, w: 90, h: 18, k: "sp" }], b: [{ x: 620, y: 806, w: 90, h: 24, id: "A", hv: true }, { x: 860, y: 646, w: 74, h: 24, id: "B", hv: false }], gate: [{ x: 760, y: 710, w: 48, h: 120, need: ["A"] }, { x: 1000, y: 540, w: 48, h: 130, need: ["B"] }], c: [{ x: 330, y: 700, t: "heart" }, { x: 650, y: 760, t: "star" }, { x: 910, y: 630, t: "heart" }, { x: 1420, y: 520, t: "fish" }], goal: { x: 1430, y: 430, w: 130, h: 130 }, ch: s => s.star >= 1 },
+      { name: "终极贴贴游乐场X", theme: "全机制高难", hint: "双按钮+连续吞吐+移动平台+二段跳", sp: { b: [90, 810], w: [150, 810] }, p: [{ x: 0, y: 830, w: 220, h: 70, s: "mint" }, { x: 290, y: 760, w: 150, h: 22, s: "blue" }, { x: 520, y: 700, w: 145, h: 22, s: "pink", m: { t: "sx", r: 80, v: 1.35 } }, { x: 770, y: 640, w: 150, h: 22, s: "mint" }, { x: 1030, y: 590, w: 145, h: 22, s: "blue", m: { t: "sy", r: 90, v: 1.2 } }, { x: 1270, y: 530, w: 145, h: 22, s: "pink" }, { x: 1490, y: 465, w: 90, h: 22, s: "mint" }], h: [{ x: 220, y: 830, w: 140, h: 70, k: "co" }, { x: 660, y: 830, w: 130, h: 70, k: "co" }, { x: 920, y: 830, w: 110, h: 70, k: "co" }, { x: 1180, y: 830, w: 100, h: 70, k: "co" }, { x: 1415, y: 830, w: 75, h: 70, k: "co" }], b: [{ x: 330, y: 806, w: 64, h: 24, id: "A", hv: false }, { x: 430, y: 806, w: 64, h: 24, id: "B", hv: false }], gate: [{ x: 500, y: 700, w: 42, h: 130, need: ["A", "B"] }], c: [{ x: 340, y: 720, t: "heart" }, { x: 650, y: 630, t: "fish" }, { x: 860, y: 590, t: "heart" }, { x: 1100, y: 500, t: "star" }, { x: 1390, y: 470, t: "fish" }, { x: 1220, y: 430, t: "star" }], goal: { x: 1490, y: 330, w: 100, h: 130 }, ch: s => s.death <= 1 && s.fish >= 2 }
+    ];
+  }
+
+  const LV = levels();
+  const S = {
+    mode: "menu", li: 0, ps: [], pl: [], hz: [], col: [], bt: [], gt: [], goal: null,
+    death: 0, assist: false, stats: { heart: 0, fish: 0, star: 0, challenge: false, stars: 0 },
+    prog: { best: Array(8).fill(0), tf: 0, ts: 0, streak: 0, td: 0 },
+    t: 0, trans: 0.45, toast: "", toastT: 0, spitChain: 0, pause: false, settings: false
+  };
+
+  function cos() {
+    return {
+      trail: S.prog.streak >= 3,
+      bow: S.prog.tf >= 20,
+      blush: S.prog.ts >= 15,
+      sparkle: S.prog.best.every(v => v >= 3)
+    };
+  }
+
+  function load(i) {
+    const d = LV[i];
+    S.pl = d.p.map(p => ({ ...p, bx: p.x, by: p.y, tt: 0, dx: 0, dy: 0 }));
+    S.hz = d.h.map(v => ({ ...v }));
+    S.col = d.c.map(v => ({ ...v, got: false, tt: Math.random() * 8 }));
+    S.bt = d.b.map(v => ({ ...v, on: false }));
+    S.gt = d.gate.map(v => ({ ...v, open: false }));
+    S.goal = { ...d.goal };
+    S.ps = [
+      new Cat("blue", "blue", { l: "KeyA", r: "KeyD", j: "KeyW", a: "KeyF" }, d.sp.b[0], d.sp.b[1]),
+      new Cat("white", "white", { l: "ArrowLeft", r: "ArrowRight", j: "ArrowUp", a: "Slash" }, d.sp.w[0], d.sp.w[1])
+    ];
+    S.death = 0; S.assist = false;
+    S.stats = { heart: 0, fish: 0, star: 0, challenge: false, stars: 0 };
+    S.spitChain = 0; S.pause = false;
+  }
+
+  function die(p) {
+    if (p.dead || S.mode !== "play") return;
+    p.dead = true;
+    S.death++; S.prog.td++;
+    shake = 0.24;
+    burst(p.x, p.y - p.h * 0.5, 24, "#ffc4d8", 280, 0.8);
+    burst(p.x, p.y - p.h * 0.5, 12, "#fff", 210, 0.6);
+    const o = S.ps.find(v => v.id !== p.id);
+    if (o && o.carry === p.id) o.carry = null;
+    p.inBy = null;
+    setTimeout(() => {
+      if (S.mode !== "play") return;
+      const keep = S.col.map(v => v.got);
+      load(S.li);
+      S.col.forEach((v, i) => v.got = keep[i]);
+      if (S.death >= 3) S.assist = true;
+    }, 390);
+  }
+
+  function solids() {
+    const a = [];
+    for (const p of S.pl) a.push({ x: p.x, y: p.y, w: p.w, h: p.h, ref: p });
+    for (const g of S.gt) if (!g.open) a.push({ x: g.x, y: g.y, w: g.w, h: g.h });
+    return a;
+  }
+
+  function updateLevel(dt) {
+    const d = LV[S.li];
+    for (const p of S.pl) {
+      p.dx = p.dy = 0;
+      if (!p.m) continue;
+      p.tt += dt;
+      const ox = p.x, oy = p.y;
+      if (p.m.t === "sx") p.x = p.bx + Math.sin(p.tt * p.m.v) * p.m.r;
+      if (p.m.t === "sy") p.y = p.by + Math.sin(p.tt * p.m.v) * p.m.r;
+      p.dx = p.x - ox; p.dy = p.y - oy;
+    }
+    for (const c of S.col) c.tt += dt;
+
+    for (const b of S.bt) {
+      let m = 0;
+      for (const p of S.ps) if (!p.dead && !p.inBy && hit(p.box(), b)) m += p.mass();
+      b.on = m >= (b.hv ? 2 : 1);
+    }
+    for (const g of S.gt) g.open = g.need.every(id => S.bt.find(b => b.id === id && b.on));
+
+    for (const p of S.ps) {
+      if (p.dead || p.cd > 0 || !K.hit.has(p.key.a)) continue;
+      if (p.carry) {
+        const q = S.ps.find(v => v.id === p.carry);
+        p.carry = null; q.inBy = null;
+        q.x = p.x + p.face * (p.w * 0.62);
+        q.y = p.y - p.h * 0.66;
+        const power = S.assist ? 900 : 840;
+        q.vx = p.face * power;
+        q.vy = -390;
+        q.fly = 0.44;
+        q.ground = false;
+        q.mood = "wow"; p.mood = "happy";
+        p.cd = 0.24; q.cd = 0.2; S.spitChain++;
+        shake = Math.max(shake, 0.2);
+        burst(q.x, q.y, 32, "#b7ebff", 380, 0.56);
+        burst(q.x, q.y, 24, "#ffe2f4", 320, 0.5);
+      } else {
+        const q = S.ps.find(v => v.id !== p.id);
+        if (!q || q.dead || q.inBy || p.inBy || q.carry) continue;
+        if (Math.hypot(p.x - q.x, p.y - q.y) > 92) continue;
+        p.carry = q.id; q.inBy = p.id; q.vx = q.vy = 0;
+        p.cd = q.cd = 0.24;
+        p.mood = "happy"; q.mood = "dizzy";
+        burst(q.x, q.y - q.h * 0.5, 20, "#ffd9ef", 230, 0.45);
+      }
+    }
+
+    for (const p of S.ps) if (p.carry) {
+      const q = S.ps.find(v => v.id === p.carry);
+      q.x = p.x + p.face * 8; q.y = p.y - p.h * 0.54;
+    }
+
+    const sol = solids();
+    for (const p of S.ps) p.upd(dt, sol);
+
+    for (const p of S.ps) {
+      if (!p.ground || p.inBy || p.dead) continue;
+      const ft = { x: p.x - p.w * 0.38, y: p.y - 1, w: p.w * 0.76, h: 2 };
+      for (const pl of S.pl) if ((pl.dx || pl.dy) && hit(ft, pl)) { p.x += pl.dx; p.y += pl.dy; }
+    }
+
+    for (const c of S.col) {
+      if (c.got) continue;
+      for (const p of S.ps) {
+        if (!p.dead && !p.inBy && hit(p.box(), { x: c.x - 14, y: c.y - 14, w: 28, h: 28 })) {
+          c.got = true;
+          if (c.t === "heart") S.stats.heart++;
+          if (c.t === "fish") S.stats.fish++;
+          if (c.t === "star") S.stats.star++;
+          burst(c.x, c.y, 14, c.t === "fish" ? "#aeefff" : c.t === "star" ? "#fff3a8" : "#ffc3dc", 230, 0.58);
+        }
+      }
+    }
+
+    for (const h of S.hz) {
+      const hb = { x: h.x + 6 + (S.assist ? 8 : 0), y: h.y + 6 + (S.assist ? 8 : 0), w: h.w - 12 - (S.assist ? 16 : 0), h: h.h - 12 - (S.assist ? 16 : 0) };
+      for (const p of S.ps) if (!p.dead && !p.inBy && hb.w > 4 && hb.h > 4 && hit(p.box(), hb)) die(p);
+    }
+
+    const done = S.ps.every(p => !p.dead && !p.inBy && hit(p.box(), S.goal));
+    if (done) {
+      S.stats.challenge = d.ch(S);
+      const got = S.col.filter(v => v.got).length / S.col.length;
+      let st = 1;
+      if (got >= 0.65 && S.death <= 3) st = 2;
+      if (got >= 0.9 && S.death <= 1 && S.stats.challenge) st = 3;
+      S.stats.stars = st;
+      S.prog.tf += S.stats.fish;
+      S.prog.ts += S.stats.star;
+      S.prog.best[S.li] = Math.max(S.prog.best[S.li], st);
+      if (st >= 2) S.prog.streak++; else S.prog.streak = 0;
+      if (S.prog.streak === 3) { S.toast = "解锁: 猫咪发光拖尾!"; S.toastT = 3; }
+      if (S.prog.tf >= 20 && S.toastT <= 0) { S.toast = "解锁: 白猫闪亮蝴蝶结!"; S.toastT = 3; }
+      if (S.prog.ts >= 15 && S.toastT <= 0) { S.toast = "解锁: 蓝猫蜜桃腮红!"; S.toastT = 3; }
+      burst(S.goal.x + S.goal.w / 2, S.goal.y, 46, "#fff0a8", 350, 0.95);
+      burst(S.goal.x + S.goal.w / 2, S.goal.y, 38, "#ffd0ea", 310, 0.88);
+      S.mode = "result";
+      S.trans = 0.36;
+    }
+  }
+
+  function drawDecor() {
+    const t = S.t;
+    for (let i = 0; i < 5; i++) {
+      const x0 = wx(160 + i * 280);
+      const y0 = wy(620 + (i % 2) * 40);
+      rr(x0, y0, wx(52), wy(90), 14, "#b3efb6", "#86ce92");
+      rr(x0 - wx(14), y0 - wy(24), wx(80), wy(28), 14, "#ffd5ea", "#ffbad9");
+      candySwirl(x0 + wx(22), y0 - wy(10), wx(8), "#ff8ac2", "#ffd7ec");
+    }
+    for (let i = 0; i < 6; i++) {
+      const x0 = wx((i * 260 + t * 14) % (WW + 180) - 90);
+      const y0 = wy(720 + (i % 2) * 30);
+      rr(x0, y0, wx(36), wy(28), 8, "#8d5a43", "#714432");
+      rr(x0 + wx(4), y0 + wy(4), wx(28), wy(7), 3, "#f0d7a8", "#e4c694");
+      rr(x0 + wx(4), y0 + wy(14), wx(28), wy(7), 3, "#f0d7a8", "#e4c694");
+    }
+    rr(wx(1340), wy(560), wx(120), wy(120), 20, "rgba(255,188,220,0.18)", "rgba(255,130,180,0.18)");
+    rr(wx(1360), wy(610), wx(80), wy(70), 12, "rgba(120,70,50,0.22)", "rgba(90,50,35,0.22)");
+  }
+
+  function drawPlay() {
+    const C = cos();
+    drawCandySky(S.t, C.sparkle);
+    drawDecor();
+
+    for (let i = 0; i < S.pl.length; i++) drawSweetPlatform(S.pl[i], i);
+
+    rr(wx(S.goal.x), wy(S.goal.y), wx(S.goal.w), wy(S.goal.h), 14, "#fff", "#ffe6f3");
+    ctx.fillStyle = "#8f5a3b";
+    rr(wx(S.goal.x + 18), wy(S.goal.y + 20), wx(S.goal.w - 36), wy(S.goal.h - 24), 12, "#7a4a39", "#5c3225");
+    ctx.fillStyle = "#f8d2ea";
+    ctx.beginPath();
+    ctx.arc(wx(S.goal.x + S.goal.w / 2), wy(S.goal.y + 58), wx(20), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#b56f8d";
+    ctx.font = "700 20px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("GOAL", wx(S.goal.x + S.goal.w / 2), wy(S.goal.y + S.goal.h * 0.72));
+
+    for (const h of S.hz) {
+      const hx = wx(h.x), hy = wy(h.y), hw = wx(h.w), hh = wy(h.h);
+      if (h.k === "sp") {
+        rr(hx, hy + hh - 14, hw, 14, 7, "#ffc0cc", "#ff9bb0");
+        const n = Math.max(3, Math.floor(hw / 24));
+        for (let i = 0; i < n; i++) {
+          const px = hx + (i + 0.5) * hw / n;
+          ctx.beginPath();
+          ctx.moveTo(px - 10, hy + hh - 14);
+          ctx.lineTo(px, hy + 3);
+          ctx.lineTo(px + 10, hy + hh - 14);
+          ctx.closePath();
+          ctx.fillStyle = i % 2 ? "#ff7d95" : "#ff6787";
+          ctx.fill();
+        }
+      } else {
+        rr(hx, hy, hw, hh, 9, "#98e57f", "#78c35f");
+      }
+    }
+
+    for (const b of S.bt) {
+      rr(wx(b.x), wy(b.y), wx(b.w), wy(b.h), 9, b.on ? "#9ff0ca" : "#ffd6e8", b.on ? "#70cca2" : "#ffb4cf");
+      ctx.fillStyle = b.on ? "#30745d" : "#8d4c68";
+      ctx.font = "700 13px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(b.hv ? "HEAVY" : "SW", wx(b.x + b.w / 2), wy(b.y + b.h * 0.66));
+    }
+    for (const g of S.gt) {
+      if (g.open) {
+        ctx.globalAlpha = 0.3;
+        rr(wx(g.x), wy(g.y), wx(g.w), wy(g.h), 10, "#b9ffd8", "#90eac0");
+        ctx.globalAlpha = 1;
+      } else rr(wx(g.x), wy(g.y), wx(g.w), wy(g.h), 10, "#ffd8ea", "#ffb7d5");
+    }
+
+    for (const c of S.col) if (!c.got) {
+      const by = Math.sin(c.tt * 3) * 6;
+      const px = wx(c.x), py = wy(c.y + by);
+      ctx.globalAlpha = 0.3 + 0.2 * Math.sin(c.tt * 4);
+      ctx.fillStyle = c.t === "fish" ? "#baf2ff" : c.t === "star" ? "#fff6a7" : "#ffd4e7";
+      ctx.beginPath();
+      ctx.arc(px, py, wx(16), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      if (c.t === "heart") heart(px, py, wx(12));
+      if (c.t === "fish") fish(px, py, wx(14));
+      if (c.t === "star") star(px, py, wx(13));
+    }
+
+    for (const p of S.ps) p.draw(C);
+    for (const p of S.ps) if (p.inBy) {
+      const byP = S.ps.find(v => v.id === p.inBy);
+      ctx.globalAlpha = 0.45;
+      ctx.fillStyle = p.kind === "blue" ? "#a9d7ff" : "#ffe0ef";
+      ctx.beginPath();
+      ctx.ellipse(wx(byP.x), wy(byP.y - byP.h * 0.56), wx(16), wy(11), 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    rr(18, 14, 390, 126, 18, "rgba(255,255,255,0.94)", "rgba(255,255,255,0.84)");
+    ctx.fillStyle = "#5f4d68";
+    ctx.textAlign = "left";
+    ctx.font = "700 23px sans-serif";
+    ctx.fillText(`关卡 ${S.li + 1}: ${LV[S.li].name}`, 34, 46);
+    ctx.font = "600 17px sans-serif";
+    ctx.fillText(`主题: ${LV[S.li].theme}`, 34, 72);
+    ctx.fillText(LV[S.li].hint, 34, 96);
+
+    rr(vw - 356, 14, 338, 126, 18, "rgba(255,255,255,0.94)", "rgba(255,255,255,0.84)");
+    ctx.font = "700 23px sans-serif";
+    ctx.fillStyle = "#6b5a76";
+    ctx.fillText(`❤ ${S.stats.heart}   🐟 ${S.stats.fish}   ✦ ${S.stats.star}`, vw - 336, 48);
+    ctx.font = "600 17px sans-serif";
+    ctx.fillStyle = S.assist ? "#41947d" : "#7a6d84";
+    ctx.fillText(`死亡 ${S.death}${S.assist ? "  (轻柔辅助中)" : ""}`, vw - 336, 76);
+    ctx.fillText(`吞吐连段 ${S.spitChain} / 二段跳开启`, vw - 336, 102);
+
+    rr(18, 144, 62, 62, 20, "#ffd3e8", "#ffb8d8");
+    ctx.fillStyle = "#75485f";
+    ctx.font = "900 28px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("⚙", 49, 184);
+    ctx.fillStyle = "rgba(255,255,255,0.45)";
+    ctx.beginPath();
+    ctx.arc(38, 164, 8, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (S.toastT > 0) {
+      rr(vw * 0.5 - 220, 16, 440, 44, 14, "rgba(255,255,255,0.95)", "rgba(255,255,255,0.86)");
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#5d5a72";
+      ctx.font = "700 18px sans-serif";
+      ctx.fillText(S.toast, vw * 0.5, 44);
+    }
+
+    if (S.settings) drawSettings();
+    if (S.pause) {
+      rr(vw * 0.5 - 190, vh * 0.5 - 62, 380, 124, 24, "rgba(255,255,255,0.95)", "rgba(255,255,255,0.86)");
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#6f5f7a";
+      ctx.font = "900 42px sans-serif";
+      ctx.fillText("PAUSED", vw * 0.5, vh * 0.5 + 6);
+      ctx.font = "600 18px sans-serif";
+      ctx.fillText("Esc 或设置面板继续", vw * 0.5, vh * 0.5 + 38);
+    }
+  }
+
+  function drawSettings() {
+    rr(90, 142, 370, 372, 26, "rgba(255,255,255,0.97)", "rgba(255,255,255,0.89)");
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#694f75";
+    ctx.font = "800 27px sans-serif";
+    ctx.fillText("设置菜单", 112, 182);
+    rr(112, 200, 330, 46, 14, "#ffe2f0", "#ffd0e4");
+    ctx.fillStyle = "#744a61";
+    ctx.font = "700 20px sans-serif";
+    ctx.fillText(S.pause ? "继续游戏" : "暂停游戏", 130, 230);
+    ctx.fillStyle = "#6b5a76";
+    ctx.font = "700 18px sans-serif";
+    ctx.fillText("关卡选择", 112, 272);
+    for (let i = 0; i < 8; i++) {
+      const cx = 112 + (i % 4) * 82;
+      const cy = 286 + Math.floor(i / 4) * 74;
+      rr(cx, cy, 66, 56, 14, "#dff1ff", "#cde7ff");
+      ctx.fillStyle = "#4f6f89";
+      ctx.font = "800 22px sans-serif";
+      ctx.fillText(String(i + 1), cx + 25, cy + 36);
+    }
+  }
+
+  function drawMenu() {
+    drawCandySky(S.t, true);
+    rr(vw * 0.5 - 360, vh * 0.15, 720, 490, 34, "rgba(255,255,255,0.95)", "rgba(255,255,255,0.87)");
+    const lg = ctx.createLinearGradient(vw * 0.5 - 180, 0, vw * 0.5 + 180, 0);
+    lg.addColorStop(0, "#ff80ba");
+    lg.addColorStop(1, "#88caff");
+    ctx.fillStyle = lg;
+    ctx.font = "900 62px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("双猫贴贴大冒险", vw * 0.5, vh * 0.25);
+    ctx.fillStyle = "#745e80";
+    ctx.font = "700 30px sans-serif";
+    ctx.fillText("Cute Duo Cat Adventure", vw * 0.5, vh * 0.305);
+    ctx.font = "700 26px sans-serif";
+    ctx.fillText("Enter / Space 开始冒险", vw * 0.5, vh * 0.375);
+    ctx.font = "600 22px sans-serif";
+    ctx.fillText("蓝猫 A/D + W + F   白猫 ←/→ + ↑ + /", vw * 0.5, vh * 0.45);
+    ctx.fillText("糖果甜品世界升级版", vw * 0.5, vh * 0.50);
+  }
+
+  function drawResult() {
+    drawPlay();
+    rr(vw * 0.5 - 320, vh * 0.5 - 220, 640, 440, 28, "rgba(255,255,255,0.95)", "rgba(255,255,255,0.9)");
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#d2619c";
+    ctx.font = "900 48px sans-serif";
+    ctx.fillText("贴贴成功!", vw * 0.5, vh * 0.5 - 150);
+    ctx.fillStyle = "#675971";
+    ctx.font = "700 25px sans-serif";
+    ctx.fillText(`关卡 ${S.li + 1} 完成`, vw * 0.5, vh * 0.5 - 114);
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#63556e";
+    ctx.font = "700 29px sans-serif";
+    ctx.fillText(`收集: ❤ ${S.stats.heart}   🐟 ${S.stats.fish}   ✦ ${S.stats.star}`, vw * 0.5 - 250, vh * 0.5 - 52);
+    ctx.font = "700 24px sans-serif";
+    ctx.fillText(`死亡次数: ${S.death}`, vw * 0.5 - 250, vh * 0.5 - 10);
+    ctx.fillStyle = S.stats.challenge ? "#4f9d7f" : "#9c7185";
+    ctx.fillText(`特殊挑战: ${S.stats.challenge ? "完成" : "未完成"}`, vw * 0.5 - 250, vh * 0.5 + 30);
+    ctx.fillStyle = "#efb53d";
+    ctx.font = "900 34px sans-serif";
+    ctx.fillText(`星级: ${"★".repeat(S.stats.stars)}${"☆".repeat(3 - S.stats.stars)}`, vw * 0.5 - 250, vh * 0.5 + 78);
+    rr(vw * 0.5 - 250, vh * 0.5 + 130, 220, 64, 30, "#ffd2e7", "#ffb7d8");
+    rr(vw * 0.5 + 30, vh * 0.5 + 130, 220, 64, 30, "#ffd2e7", "#ffb7d8");
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#734c62";
+    ctx.font = "700 24px sans-serif";
+    ctx.fillText("Enter 下一关", vw * 0.5 - 140, vh * 0.5 + 170);
+    ctx.fillText("R 再试一次", vw * 0.5 + 140, vh * 0.5 + 170);
+  }
+
+  function drawFinal() {
+    drawCandySky(S.t, true);
+    rr(vw * 0.5 - 360, vh * 0.5 - 250, 720, 520, 30, "rgba(255,255,255,0.96)", "rgba(255,255,255,0.9)");
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#d65e99";
+    ctx.font = "900 46px sans-serif";
+    ctx.fillText("恭喜通关 双猫贴贴大冒险!", vw * 0.5, vh * 0.5 - 180);
+    ctx.fillStyle = "#6a5f74";
+    ctx.font = "700 25px sans-serif";
+    ctx.fillText("你们是真正的合作搭档", vw * 0.5, vh * 0.5 - 142);
+    const total = S.prog.best.reduce((a, b) => a + b, 0);
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#685a72";
+    ctx.font = "700 30px sans-serif";
+    ctx.fillText(`总星级: ${total}/24`, vw * 0.5 - 250, vh * 0.5 - 72);
+    ctx.fillText(`总小鱼: ${S.prog.tf}`, vw * 0.5 - 250, vh * 0.5 - 30);
+    ctx.fillText(`总星星: ${S.prog.ts}`, vw * 0.5 - 250, vh * 0.5 + 12);
+    ctx.fillStyle = "#7f7289";
+    ctx.font = "700 24px sans-serif";
+    ctx.fillText(`总死亡: ${S.prog.td}`, vw * 0.5 - 250, vh * 0.5 + 52);
+    rr(vw * 0.5 - 130, vh * 0.5 + 190, 260, 58, 29, "#ffd2e7", "#ffb7d8");
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#734c62";
+    ctx.font = "700 24px sans-serif";
+    ctx.fillText("Enter 再玩一次", vw * 0.5, vh * 0.5 + 226);
+  }
+
+  function uiClick(mx, my) {
+    if (S.mode !== "play") return;
+    if (mx >= 18 && mx <= 80 && my >= 144 && my <= 206) { S.settings = !S.settings; return; }
+    if (!S.settings) return;
+    if (mx >= 112 && mx <= 442 && my >= 200 && my <= 246) { S.pause = !S.pause; S.settings = false; return; }
+    for (let i = 0; i < 8; i++) {
+      const cx = 112 + (i % 4) * 82, cy = 286 + Math.floor(i / 4) * 74;
+      if (mx >= cx && mx <= cx + 66 && my >= cy && my <= cy + 56) {
+        S.li = i; load(i); S.settings = false; S.pause = false; return;
+      }
+    }
+  }
+  cv.addEventListener("click", e => {
+    const r = cv.getBoundingClientRect();
+    uiClick(e.clientX - r.left, e.clientY - r.top);
+  });
+
+  let last = performance.now(), acc = 0;
+  const STEP = 1 / 60;
+  function loop(now) {
+    const dt = Math.min(0.033, (now - last) / 1000);
+    last = now;
+    acc += dt;
+    while (acc >= STEP) {
+      S.t += STEP;
+      if (S.toastT > 0) S.toastT -= STEP;
+      if (K.hit.has("Escape") && S.mode === "play") { S.pause = !S.pause; S.settings = false; }
+
+      if (S.mode === "menu") {
+        if (K.hit.has("Enter") || K.hit.has("Space")) { S.mode = "play"; S.li = 0; load(0); S.trans = 0.45; }
+      } else if (S.mode === "play") {
+        if (!S.pause && !S.settings) updateLevel(STEP);
+        if (K.hit.has("KeyR")) {
+          const keep = S.col.map(v => v.got);
+          load(S.li);
+          S.col.forEach((v, i) => v.got = keep[i]);
+        }
+      } else if (S.mode === "result") {
+        if (K.hit.has("KeyR")) { load(S.li); S.mode = "play"; }
+        if (K.hit.has("Enter") || K.hit.has("Space")) {
+          if (S.li < 7) { S.li++; load(S.li); S.mode = "play"; }
+          else S.mode = "final";
+        }
+      } else if (S.mode === "final") {
+        if (K.hit.has("Enter") || K.hit.has("Space")) S.mode = "menu";
+      }
+
+      for (let i = fx.length - 1; i >= 0; i--) {
+        const f = fx[i];
+        f.t -= STEP;
+        f.vx *= 0.96;
+        f.vy += f.g * STEP;
+        f.x += f.vx * STEP;
+        f.y += f.vy * STEP;
+        if (f.t <= 0) fx.splice(i, 1);
+      }
+
+      if (shake > 0) shake -= STEP;
+      S.trans = Math.max(0, S.trans - STEP);
+      K.hit.clear();
+      acc -= STEP;
+    }
+
+    ctx.save();
+    if (shake > 0) ctx.translate((Math.random() * 2 - 1) * 6, (Math.random() * 2 - 1) * 5);
+    if (S.mode === "menu") drawMenu();
+    else if (S.mode === "play") drawPlay();
+    else if (S.mode === "result") drawResult();
+    else drawFinal();
+    for (const f of fx) {
+      const a = Math.max(0, f.t / f.m);
+      ctx.globalAlpha = a;
+      ctx.fillStyle = f.c;
+      ctx.beginPath();
+      ctx.arc(wx(f.x), wy(f.y), wx(f.s), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+    if (S.trans > 0) {
+      ctx.fillStyle = `rgba(255,248,255,${S.trans * 1.5})`;
+      ctx.fillRect(0, 0, vw, vh);
+    }
+    ctx.restore();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
